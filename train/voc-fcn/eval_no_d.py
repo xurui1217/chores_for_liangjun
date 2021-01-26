@@ -13,10 +13,9 @@ from torch.utils.data import DataLoader
 import utils.joint_transforms as joint_transforms
 import utils.transforms as extended_transforms
 from datasets import wp
-from models.resnet34_xr import *
+from models import *
 from utils import check_mkdir, evaluate, AverageMeter, CrossEntropyLoss2d, DiceLoss, make_one_hot
 import logging
-import numpy as np
 
 cudnn.benchmark = False
 
@@ -24,7 +23,6 @@ ckpt_path = './ckpt'
 exp_name = 'voc-fcn8s_dice'
 print(os.path.join(ckpt_path, 'exp2', exp_name))
 writer = SummaryWriter(os.path.join(ckpt_path, 'exp2', exp_name))
-
 
 args = {
     'epoch_num': 300,
@@ -53,7 +51,7 @@ def main(train_args):
     backbone.load_state_dict(torch.load(
         './weight/resnet34-333f7ec4.pth'), strict=False)
     net = Decoder34(num_classes=13, backbone=backbone).cuda()
-    D = discriminator(input_channels=16).cuda()
+    D = Discriminator(input_channels=16).cuda()
     if len(train_args['snapshot']) == 0:
         curr_epoch = 1
         train_args['best_record'] = {
@@ -89,7 +87,7 @@ def main(train_args):
 
     train_set = wp.Wp('train', transform=input_transform,
                       target_transform=target_transform)
-    train_loader = DataLoader(train_set, batch_size=4,
+    train_loader = DataLoader(train_set, batch_size=8,
                               num_workers=4, shuffle=True)
     # val_set = wp.Wp('val', transform=input_transform,
     #                 target_transform=target_transform)
@@ -97,7 +95,6 @@ def main(train_args):
     val_loader = DataLoader(train_set, batch_size=1,
                             num_workers=4, shuffle=False)
     criterion = DiceLoss().cuda()
-    criterion_D = nn.BCELoss().cuda()
     optimizer_AE = optim.Adam([
         {'params': [param for name, param in net.named_parameters() if name[-4:] == 'bias'],
          'lr': 2 * train_args['lr']},
@@ -125,14 +122,14 @@ def main(train_args):
     scheduler = ReduceLROnPlateau(
         optimizer_AE, 'min', patience=train_args['lr_patience'], min_lr=1e-10, verbose=True)
     for epoch in range(curr_epoch, train_args['epoch_num'] + 1):
-        train(train_loader, net, D, criterion, criterion_D, optimizer_AE,
+        train(train_loader, net, D, criterion, optimizer_AE,
               optimizer_D, epoch, train_args)
-        val_loss = validate(val_loader, net, criterion, optimizer_AE,
+        val_loss = validate(val_loader, net, D, criterion, optimizer_AE, optimizer_D,
                             epoch, train_args, restore_transform, visualize)
         scheduler.step(val_loss)
 
 
-def train(train_loader, net, D, criterion, criterion_D, optimizer_AE, optimizer_D, epoch, train_args):
+def train(train_loader, net, D, criterion, optimizer_AE, optimizer_D, epoch, train_args):
     train_loss = AverageMeter()
     curr_iter = (epoch - 1) * len(train_loader)
     for i, data in enumerate(train_loader):
@@ -146,26 +143,26 @@ def train(train_loader, net, D, criterion, criterion_D, optimizer_AE, optimizer_
 
         outputs = net(inputs)
         # ((a1,a2,...), axis=0)
-        origin_outputs = torch.cat(
-            [inputs, outputs], axis=1).cuda()  # B,16,H,W
-        origin_labels = torch.cat([inputs, labels], axis=1).cuda()  # B,16,H,W
+        origin_outputs = np.concatenate([inputs, outputs], axis=1)  # B,16,H,W
+        origin_labels = np.concatenate([inputs, labels], axis=1)  # B,16,H,W
         batch_size = inputs.shape[0]
 
         output_D = D(origin_labels)  # B
-        real_label = torch.ones(batch_size).cuda()  # 定义真实的图片label为1
-        fake_label = torch.zeros(batch_size).cuda()  # 定义假的图片的label为0
-        errD_real = criterion_D(output_D, real_label)
+        real_label = torch.ones(batch_size).to(device)  # 定义真实的图片label为1
+        fake_label = torch.zeros(batch_size).to(device)  # 定义假的图片的label为0
+        errD_real = criterion(output_D, real_label)
         errD_real.backward()
         # real_data_score = output_D.mean().item()
 
-        output_D = D(origin_outputs)  # B
-        errD_fake = criterion_D(output_D, fake_label)
+        fake_data = vae.decoder(origin_outputs)
+        output_D = D(fake_data)  # B
+        errD_fake = criterion(output_D, fake_label)
         errD_fake.backward()
         # fake_data_score用来输出查看的，是虚假照片的评分，0最假，1为真
         # fake_data_score = output_D.data.mean()
         errD = errD_real + errD_fake
         optimizer_D.step()
-        # print('errD', errD.item())
+        print('errD', errD.item())
 
         # 训练AE
         net.zero_grad()
@@ -175,7 +172,7 @@ def train(train_loader, net, D, criterion, criterion_D, optimizer_AE, optimizer_
         optimizer_AE.step()
 
         train_loss.update(loss.item(), batch_size)
-        # print('loss', loss.item())
+        print('loss', loss.item())
         curr_iter += 1
         writer.add_scalar('train_loss', train_loss.avg, curr_iter)
 
@@ -272,53 +269,51 @@ def validate(val_loader, net, criterion, optimizer, epoch, train_args, restore, 
 
 
 if __name__ == '__main__':
-    main(args)
-    # backbone = ResNet()
-    # backbone.load_state_dict(torch.load('../../ckpt/voc-fcn8s/epoch_53_loss_0.67099_acc_0.97743_acc-cls_0.65331_mean-iu_0.45789_fwavacc_0.97293_lr_0.0001000000.pth'), strict=False)
-    # net = Decoder34(num_classes=13,backbone=backbone).cuda()
-    # net.eval()
-    # mean_std = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-    # # train_joint_transform = joint_transforms.Compose([
-    # #     joint_transforms.Scale(512),
-    # #     joint_transforms.RandomRotate(10),
-    # #     joint_transforms.RandomHorizontallyFlip()
-    # # ])
-    # # sliding_crop = joint_transforms.SlidingCrop(224, 2 / 3., -1)
-    # input_transform = standard_transforms.Compose([
-    #     standard_transforms.ToTensor(),
-    #     standard_transforms.Normalize(*mean_std)
-    # ])
-    # target_transform = extended_transforms.MaskToTensor()
-    # restore_transform = standard_transforms.Compose([
-    #     extended_transforms.DeNormalize(*mean_std),
-    #     standard_transforms.ToPILImage(),
-    # ])
-    # visualize = standard_transforms.Compose([
-    #     standard_transforms.Scale(400),
-    #     standard_transforms.CenterCrop(400),
-    #     standard_transforms.ToTensor()
-    # ])
-    #
-    # val_set = wp.Wp('val', transform=input_transform, target_transform=target_transform)
-    # val_loader = DataLoader(val_set, batch_size=1, num_workers=4, shuffle=False)
-    # inputs_all, gts_all, predictions_all = [], [], []
-    #
-    # for vi, data in enumerate(val_loader):
-    #     inputs, gts = data
-    #     N = inputs.size(0)
-    #     inputs = Variable(inputs, volatile=True).cuda()
-    #     gts = Variable(gts, volatile=True)
-    #     gts_l = make_one_hot(gts.unsqueeze(1),wp.num_classes).cuda()
-    #     outputs = net(inputs)
-    #     predictions = outputs.data.max(1)[1].squeeze_(1).squeeze_(0).cpu().numpy()
-    #
-    #
-    #     if random.random() > 1:
-    #         inputs_all.append(None)
-    #     else:
-    #         inputs_all.append(inputs.data.squeeze_(0).cpu())
-    #     gts_all.append(gts.data.squeeze_(0).cpu().numpy())
-    #     predictions_all.append(predictions)
-    #
-    # acc, acc_cls, mean_iu, fwavacc = evaluate(predictions_all, gts_all, wp.num_classes)
-    # print(mean_iu)
+    backbone = ResNet()
+    backbone.load_state_dict(torch.load(
+        './weight/resnet34-333f7ec4.pth'), strict=False)
+    net = Decoder34(num_classes=13, backbone=backbone).cuda()
+    net.load_state_dict(torch.load('./ckpt/voc-fcn8s_dice/epoch_300_loss_0.56622_acc_0.75072_acc-cls_0.87027_mean-iu_0.81155_fwavacc_0.74957_lr_0.0000000100.pth'))
+    net.eval()
+    mean_std = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    input_transform = standard_transforms.Compose([
+        standard_transforms.ToTensor(),
+        standard_transforms.Normalize(*mean_std)
+    ])
+    target_transform = extended_transforms.MaskToTensor()
+    restore_transform = standard_transforms.Compose([
+        extended_transforms.DeNormalize(*mean_std),
+        standard_transforms.ToPILImage(),
+    ])
+    visualize = standard_transforms.Compose([
+        standard_transforms.Scale(400),
+        standard_transforms.CenterCrop(400),
+        standard_transforms.ToTensor()
+    ])
+
+    val_set = wp.Wp('train', transform=input_transform,
+                    target_transform=target_transform)
+    val_loader = DataLoader(val_set, batch_size=1,
+                            num_workers=4, shuffle=False)
+    inputs_all, gts_all, predictions_all = [], [], []
+
+    for vi, data in enumerate(val_loader):
+        inputs, gts = data
+        N = inputs.size(0)
+        inputs = Variable(inputs, volatile=True).cuda()
+        gts = Variable(gts, volatile=True)
+        gts_l = make_one_hot(gts.unsqueeze(1), wp.num_classes).cuda()
+        outputs = net(inputs)
+        predictions = outputs.data.max(1)[1].squeeze_(
+            1).squeeze_(0).cpu().numpy()
+
+        if random.random() > 1:
+            inputs_all.append(None)
+        else:
+            inputs_all.append(inputs.squeeze(0).detach().cpu())
+        gts_all.append(gts.squeeze(0).detach().cpu().numpy())
+        predictions_all.append(predictions)
+
+    acc, acc_cls, mean_iu, fwavacc = evaluate(
+        predictions_all, gts_all, wp.num_classes)
+    print(mean_iu)

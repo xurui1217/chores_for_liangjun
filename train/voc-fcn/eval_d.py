@@ -271,8 +271,9 @@ def validate(val_loader, net, criterion, optimizer, epoch, train_args, restore, 
 if __name__ == '__main__':
     backbone = ResNet()
     backbone.load_state_dict(torch.load(
-        '../../ckpt/voc-fcn8s/epoch_53_loss_0.67099_acc_0.97743_acc-cls_0.65331_mean-iu_0.45789_fwavacc_0.97293_lr_0.0001000000.pth'), strict=False)
+        './weight/resnet34-333f7ec4.pth'), strict=False)
     net = Decoder34(num_classes=13, backbone=backbone).cuda()
+    net.load_state_dict(torch.load('./ckpt/voc-fcn8s_dice/epoch_300_loss_0.56622_acc_0.75072_acc-cls_0.87027_mean-iu_0.81155_fwavacc_0.74957_lr_0.0000000100.pth'))
     net.eval()
     mean_std = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     input_transform = standard_transforms.Compose([
@@ -290,7 +291,7 @@ if __name__ == '__main__':
         standard_transforms.ToTensor()
     ])
 
-    val_set = wp.Wp('val', transform=input_transform,
+    val_set = wp.Wp('train', transform=input_transform,
                     target_transform=target_transform)
     val_loader = DataLoader(val_set, batch_size=1,
                             num_workers=4, shuffle=False)
@@ -309,8 +310,8 @@ if __name__ == '__main__':
         if random.random() > 1:
             inputs_all.append(None)
         else:
-            inputs_all.append(inputs.data.squeeze_(0).cpu())
-        gts_all.append(gts.data.squeeze_(0).cpu().numpy())
+            inputs_all.append(inputs.squeeze(0).detach().cpu())
+        gts_all.append(gts.squeeze(0).detach().cpu().numpy())
         predictions_all.append(predictions)
 
     acc, acc_cls, mean_iu, fwavacc = evaluate(

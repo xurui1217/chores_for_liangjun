@@ -34,21 +34,21 @@ class discriminator(nn.Module):
         self.dis = nn.Sequential(
             nn.Conv2d(input_channels, 32, 3, stride=1, padding=1),
             nn.LeakyReLU(0.2, True),
-            nn.MaxPool2d((2, 2)),
+            nn.MaxPool2d((4, 4)),
 
             nn.Conv2d(32, 64, 3, stride=1, padding=1),
             nn.LeakyReLU(0.2, True),
-            nn.MaxPool2d((2, 2)),
+            nn.MaxPool2d((4, 4)),
         )
         self.fc = nn.Sequential(
-            nn.Linear(7*7*64, 1024),
+            nn.Linear(30*40*64, 1024),
             nn.LeakyReLU(0.2, True),
             nn.Linear(1024, 1),
             nn.Sigmoid()
         )
 
     def forward(self, x):
-        x = self.dis(x)
+        x = self.dis(x) # torch.Size([8, 64, 30, 40])
         x = x.view(x.size(0), -1)
         x = self.fc(x)
         return x

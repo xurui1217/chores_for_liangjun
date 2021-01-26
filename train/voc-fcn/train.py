@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 import utils.joint_transforms as joint_transforms
 import utils.transforms as extended_transforms
 from datasets import wp
-from models import *
+from models.resnet34 import *
 from utils import check_mkdir, evaluate, AverageMeter, CrossEntropyLoss2d, DiceLoss, make_one_hot
 import logging
 
